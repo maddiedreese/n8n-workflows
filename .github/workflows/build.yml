@@ -1,0 +1,74 @@
+name: Build & Deploy Workflows
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 2 * * 0"  # Weekly Sunday 02:00 UTC
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history for proper file timestamps
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          # Add any additional Python dependencies here if needed
+      
+      - name: Run build script
+        run: |
+          python scripts/build_workflows.py
+      
+      - name: Verify output
+        run: |
+          if [ ! -f "public/workflows.json" ]; then
+            echo "Error: workflows.json was not generated"
+            exit 1
+          fi
+          echo "Generated workflows.json:"
+          ls -la public/workflows.json
+          echo "File size: $(du -h public/workflows.json | cut -f1)"
+          echo "Workflow count: $(cat public/workflows.json | python -c "import json,sys; print(json.load(sys.stdin)['total_count'])")"
+      
+      - name: Configure Git
+        run: |
+          git config --global user.email "bot@agent98.com"
+          git config --global user.name "agent98-bot"
+      
+      - name: Deploy to GitHub Pages
+        run: |
+          # Create orphan gh-pages branch
+          git checkout --orphan gh-pages || git checkout gh-pages
+          
+          # Clean up everything except our generated file
+          git rm -rf . 2>/dev/null || true
+          
+          # Copy our generated file
+          cp public/workflows.json workflows.json
+          
+          # Add CORS headers file for GitHub Pages
+          echo '{"workflows": "https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/workflows.json"}' > index.json
+          
+          # Commit and push
+          git add workflows.json index.json
+          git commit -m "Auto-build workflows.json - $(date)" || exit 0
+          git push --force origin gh-pages
+      
+      - name: Trigger Lovable deployment
+        if: env.LOVABLE_DEPLOY_URL != ''
+        env:
+          DEPLOY_URL: ${{ secrets.LOVABLE_DEPLOY_URL }}
+        run: |
+          curl -X POST "$DEPLOY_URL" || echo "Lovable deploy webhook failed (this is optional)"
